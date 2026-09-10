@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Уменьшение RPG Loot Icons 01 (147px) до 128x128 с подавлением шума
+Уменьшение RPG-иконок (147px) до 128x128 с подавлением шума
 при сохранении деталей.
 
 Пайплайн (подобран по метрикам шума/деталей и визуальному сравнению):
@@ -19,8 +19,11 @@ import os
 import glob
 import cv2
 
-SRC_DIR = "RPG Loot Icons 01"
-DST_DIR = "RPG Loot Icons 01_128_v2"
+# (папка-источник 147px, папка-приёмник 128px)
+JOBS = [
+    ("RPG Loot Icons 01", "RPG Loot Icons 01_128_v2"),
+    ("RPG Loot Icons 02", "RPG Loot Icons 02_128"),
+]
 SIZE = 128
 NLM_H = 3          # сила шумоподавления (малая => детали в приоритете)
 
@@ -33,12 +36,13 @@ def process(src_path, dst_path):
 
 
 def main():
-    os.makedirs(DST_DIR, exist_ok=True)
-    files = sorted(glob.glob(os.path.join(SRC_DIR, "icon_*.png")))
-    assert len(files) == 100, f"ожидалось 100 исходников, найдено {len(files)}"
-    for f in files:
-        process(f, os.path.join(DST_DIR, os.path.basename(f)))
-    print(f"Обработано {len(files)} иконок -> {DST_DIR}/")
+    for src_dir, dst_dir in JOBS:
+        os.makedirs(dst_dir, exist_ok=True)
+        files = sorted(glob.glob(os.path.join(src_dir, "icon_*.png")))
+        assert len(files) == 100, f"{src_dir}: ожидалось 100 исходников, найдено {len(files)}"
+        for f in files:
+            process(f, os.path.join(dst_dir, os.path.basename(f)))
+        print(f"{src_dir} -> {dst_dir}: {len(files)} иконок")
 
 
 if __name__ == "__main__":
