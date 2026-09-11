@@ -9,8 +9,9 @@ sheet automatically (grid position varies slightly between sheets; folders
     RPG Loot Icons NN/icons/icon_001.png ... icon_100.png
     (Part 1 -> 001-050, Part 2 -> 051-100, row-major order)
 
-Icons are 148x148, cropped centered on each detected cell, without the thin
-gray cell border, on the original black background.
+Icons are 144x144, cropped inside each cell's real gray border lines
+(detected by snapping; 2px margin off the lines), on the original black
+background. Borderless sheets (39-40) are cropped centered on each cell.
 
 Usage:
     python3 cut_icons.py            # process all folders
@@ -24,7 +25,7 @@ import sys
 
 from PIL import Image
 
-SIZE = 148  # uniform output icon size (px), centered on detected cell
+SIZE = 144  # uniform output icon size (px), centered on detected cell
 BG_LEVEL = 25  # pixel brightness threshold: <= this counts as black background
 STEP = 2  # sampling step for profiles (speed; detection is robust to it)
 
@@ -129,23 +130,101 @@ def grid_for(path):
     return (cc, rc, mw, mh, tc, tr), None
 
 
+def _snap_edge(px, w, h, x0, x1, y0, y1):
+    """Snap a cell box to its real gray border lines.
+
+    Gap-profile detection can be off by a few px when a bright icon touches
+    the border (JPEG ringing). The border itself is unambiguous: a full-height
+    (resp. full-width) line of gray pixels. Returns refined (bl, bt, br, bb)
+    border lines, or None if not found (e.g. borderless sheets).
+    """
+    x0, x1, y0, y1 = int(x0), int(x1), int(y0), int(y1)
+
+    def col_score(xc):
+        n = t = 0
+        for y in range(y0 + 12, y1 - 12, 2):
+            t += 1
+            if 40 <= px[xc, y] <= 130:
+                n += 1
+        return n / t
+
+    def row_score(yc):
+        n = t = 0
+        for x in range(x0 + 12, x1 - 12, 2):
+            t += 1
+            if 40 <= px[x, yc] <= 130:
+                n += 1
+        return n / t
+
+    def pick(cands, ref, inner_sign):
+        # nearest candidate to ref; tie-break towards cell interior
+        best = None
+        for c, s in cands:
+            key = (abs(c - ref), -inner_sign * c)
+            if best is None or key < best[0]:
+                best = (key, c)
+        return best[1] if best else None
+
+    bl = pick([(x, col_score(x)) for x in range(max(0, x0 - 8), x0 + 13)
+               if col_score(x) > 0.7], x0, +1)
+    br = pick([(x, col_score(x)) for x in range(x1 - 12, min(w, x1 + 9))
+               if col_score(x) > 0.7], x1, -1)
+    bt = pick([(y, row_score(y)) for y in range(max(0, y0 - 8), y0 + 13)
+               if row_score(y) > 0.7], y0, +1)
+    bb = pick([(y, row_score(y)) for y in range(y1 - 12, min(h, y1 + 9))
+               if row_score(y) > 0.7], y1, -1)
+    # per-edge fallback to the profile-detected box (may be a few px off when
+    # an icon touches the border, or on borderless sheets): keeps every edge
+    # as accurate as possible instead of discarding all four.
+    if bl is None:
+        bl = x0
+    if br is None:
+        br = x1
+    if bt is None:
+        bt = y0
+    if bb is None:
+        bb = y1
+    if not (135 <= br - bl <= 162 and 135 <= bb - bt <= 162):
+        return None
+    return bl, bt, br, bb
+
+
 def cut_sheet(part_path, out_paths):
     g, info = grid_for(part_path)
     if g is None:
         raise RuntimeError(f"grid detect failed for {part_path}: {info}")
     cc, rc, mw, mh, tc, tr = g
     im = Image.open(part_path).convert("RGB")
+    gr = Image.open(part_path).convert("L")
+    px = gr.load()
     w, h = im.size
     idx = 0
     for ry in range(5):
         for cx in range(10):
             x0, x1 = cc[cx]
             y0, y1 = rc[ry]
-            cxp = int(round((x0 + x1) / 2))
-            cyp = int(round((y0 + y1) / 2))
-            hh = SIZE // 2
-            box = (max(0, cxp - hh), max(0, cyp - hh),
-                   min(w, cxp - hh + SIZE), min(h, cyp - hh + SIZE))
+            snap = _snap_edge(px, w, h, x0, x1, y0, y1)
+            if snap is not None:
+                # interior between real borders, 2px margin off the lines
+                bl, bt, br, bb = snap
+                ix0, iy0, ix1, iy1 = bl + 2, bt + 2, br - 2, bb - 2
+                # uniform SIZE crop centered in interior (fallback: interior)
+                cxp = (ix0 + ix1) / 2
+                cyp = (iy0 + iy1) / 2
+                hh = SIZE // 2
+                if ix1 - ix0 >= SIZE and iy1 - iy0 >= SIZE:
+                    box = (int(round(cxp - hh)), int(round(cyp - hh)),
+                           int(round(cxp - hh)) + SIZE,
+                           int(round(cyp - hh)) + SIZE)
+                else:
+                    box = (int(ix0), int(iy0), int(ix1), int(iy1))
+            else:
+                # borderless sheet: centered crop on detected cell
+                cxp = int(round((x0 + x1) / 2))
+                cyp = int(round((y0 + y1) / 2))
+                hh = SIZE // 2
+                box = (max(0, cxp - hh), max(0, cyp - hh),
+                       min(w, cxp - hh + SIZE), min(h, cyp - hh + SIZE))
             crop = im.crop(box)
             if crop.size != (SIZE, SIZE):
                 canvas = Image.new("RGB", (SIZE, SIZE), (0, 0, 0))
